@@ -154,6 +154,31 @@ func initTTL() {
 		debug("CONFIG_BY_ID[%s]: %v", groupId[cfg.Channel], cfg)
 		CONFIG_BY_ID[groupId[cfg.Channel]] = cfg
 	}
+
+	// for im channels
+	users, err := RTM.GetUsers()
+	if err != nil {
+		fatal("GetUsers failed: %v", err)
+	}
+	userName := make(map[string]string)
+	for _, user1 := range users {
+		debug("userId[%s]: %s", user1.Name, user1.ID)
+		userName[user1.ID] = user1.Name
+	}
+	ims, err := RTM.GetIMChannels()
+	if err != nil {
+		fatal("GetIMChannels failed: %v", err)
+	}
+	imChannelId := make(map[string]string)
+	for _, im := range ims {
+		debug("imChannelId[%s]: %s", im.ID, im.User)
+		imChannelId[userName[im.User]] = im.ID
+	}
+
+	for _, cfg := range cfgs {
+		debug("CONFIG_BY_ID[%s]: %v", imChannelId[cfg.Channel], cfg)
+		CONFIG_BY_ID[imChannelId[cfg.Channel]] = cfg
+	}
 }
 
 func unixTime(s string) (time.Time, error) {
@@ -174,7 +199,7 @@ func deleteMessageSynchronous(ch string, msg *slack.Message, ttl int) {
 		return
 	}
 	expire :=  timeStamp.Add(time.Duration(ttl) * time.Second)
-	debug("Message %s from  %s  expire %v", ch, ts, expire)
+	debug("Message from %v expire %v", timeStamp, expire)
 	if( time.Now().Unix()<expire.Unix() ){
 		debug("Message is not yet expired")
 		return
@@ -316,6 +341,26 @@ func inspectGroupHistory(group slack.Group) {
 	}
 }
 
+func inspectImChannelHistory(im slack.IM) {
+	var err error
+	debug("inspectHistory imChannel: %s", im.ID)
+	h := &slack.History{HasMore: true}
+	params := slack.NewHistoryParameters()
+	for h.HasMore {
+		<-API_READY
+		h, err = RTM.GetIMHistory(im.ID, params)
+		if err != nil {
+			fatal("GetIMHistory(%s, %v) failed: %v", im.ID, params, err)
+		}
+		for i := 0; i < len(h.Messages); i++ {
+			handleMessage(im.ID, &h.Messages[i]) // use userId not channelId
+		}
+		if len(h.Messages) > 0 {
+			params.Latest = h.Messages[len(h.Messages)-1].Timestamp
+		}
+	}
+}
+
 func inspectFiles() {
 	params := slack.NewGetFilesParameters()
 	debug("NewGetFilesParameters: %v", params)
@@ -335,30 +380,45 @@ func inspectFiles() {
 }
 
 func inspectPast() {
-	<-API_READY
-	channels, err := RTM.GetChannels(true)
-	if err != nil {
-		fatal("GetChannels() failed: %v", err)
-	}
-	debug("There are %d channels", len(channels))
-	for _, ch := range channels {
-		if DEFAULT_MESSAGE_TTL == 0 && CONFIG_BY_ID[ch.ID].MessageTTL == 0 {
-			continue
-		}
-		inspectChannelHistory(ch)
-	}
+	//<-API_READY
+	//channels, err := RTM.GetChannels(true)
+	//if err != nil {
+	//	fatal("GetChannels() failed: %v", err)
+	//}
+	//debug("There are %d channels", len(channels))
+	//for _, ch := range channels {
+	//	if DEFAULT_MESSAGE_TTL == 0 && CONFIG_BY_ID[ch.ID].MessageTTL == 0 {
+	//		continue
+	//	}
+	//	inspectChannelHistory(ch)
+	//}
+	//
+	//<-API_READY
+	//groups, err := RTM.GetGroups(true) // private channels
+	//if err != nil {
+	//	fatal("GetGroupss() failed: %v", err)
+	//}
+	//debug("There are %d groups", len(groups))
+	//for _, group := range groups {
+	//	if DEFAULT_MESSAGE_TTL == 0 && CONFIG_BY_ID[group.ID].MessageTTL == 0 {
+	//		continue
+	//	}
+	//	inspectGroupHistory(group)
+	//}
 
 	<-API_READY
-	groups, err := RTM.GetGroups(true) // private channels
+	imChannels, err := RTM.GetIMChannels() // direct user im channels
 	if err != nil {
-		fatal("GetGroupss() failed: %v", err)
+		fatal("GetIMChannels() failed: %v", err)
 	}
-	debug("There are %d groups", len(groups))
-	for _, group := range groups {
-		if DEFAULT_MESSAGE_TTL == 0 && CONFIG_BY_ID[group.ID].MessageTTL == 0 {
+	debug("There are %d imChannels", len(imChannels))
+	for _, im := range imChannels {
+		debug("imChannel: %s (ID:%s)", im.User, im.ID)
+		if DEFAULT_MESSAGE_TTL == 0 && CONFIG_BY_ID[im.ID].MessageTTL == 0 {
+			debug("skipped no ttl")
 			continue
 		}
-		inspectGroupHistory(group)
+		inspectImChannelHistory(im)
 	}
 
 // get nicht mit bot	inspectFiles()
