@@ -29,8 +29,10 @@ var (
 	DEFAULT_MESSAGE_TTL int
 	DRY_RUN             bool
 	MAX_RETRIES         int
-	SLACK_API_TOKEN     string
+	SLACK_API_TOKEN_FILE_PATH     string
 	SLACK_API_INTERVAL  int
+	STATISTICS_HANDLED_MESSAGES	int
+	STATISTICS_DELETED_MESSAGES	int
 )
 
 func initLog() {
@@ -71,11 +73,19 @@ func initApiThrottle() {
 func initSlackRTMClient() {
 	slack.SetLogger(log)
 
-	if SLACK_API_TOKEN == "" {
+	if SLACK_API_TOKEN_FILE_PATH == "" {
 		fatal("BLACKHOLE_SLACK_API_TOKEN is not set")
 	}
-	debug("SLACK_API_TOKEN: %s", SLACK_API_TOKEN)
-	api := slack.New(SLACK_API_TOKEN)
+
+	b, err := ioutil.ReadFile(SLACK_API_TOKEN_FILE_PATH) // just pass the file name
+	    if err != nil {
+		log.Fatal("slack api token file read failed: %s",err);
+	    }
+    	apiToken := strings.TrimSpace(string(b)) // convert content to a 'string' and trim whitepsaces
+
+
+	debug("slack api token: %s", apiToken)
+	api := slack.New(apiToken)
 	if DEBUG_SLACK {
 		api.SetDebug(true)
 	}
@@ -88,7 +98,7 @@ func initSlackRTMClient() {
 	if err != nil {
 		fatal("AuthTest failed: %v", err)
 	}
-	info("Connected to %s as %s", at.Team, at.User)
+	debug("Connected to %s as %s", at.Team, at.User)
 }
 
 type Config struct {
@@ -99,7 +109,7 @@ type Config struct {
 
 func initTTL() {
 	if CONFIG_FILE == "" {
-		info("CONFIG_FILE is not specified")
+		fatal("CONFIG_FILE is not specified")
 		return
 	}
 	f, err := os.Open(CONFIG_FILE)
@@ -115,7 +125,7 @@ func initTTL() {
 	if err != nil {
 		fatal("Unmarshal(%s) failed: %v", CONFIG_FILE, err)
 	}
-	info("Config: %v", cfgs)
+	debug("Config: %v", cfgs)
 
 	channels, err := RTM.GetChannels(false)
 	if err != nil {
@@ -127,7 +137,7 @@ func initTTL() {
 		channelId[ch.Name] = ch.ID
 	}
 	for _, cfg := range cfgs {
-		info("CONFIG_BY_ID[%s]: %v", channelId[cfg.Channel], cfg)
+		debug("CONFIG_BY_ID[%s]: %v", channelId[cfg.Channel], cfg)
 		CONFIG_BY_ID[channelId[cfg.Channel]] = cfg
 	}
 	// for groups
@@ -141,7 +151,7 @@ func initTTL() {
 		groupId[group.Name] = group.ID
 	}
 	for _, cfg := range cfgs {
-		info("CONFIG_BY_ID[%s]: %v", groupId[cfg.Channel], cfg)
+		debug("CONFIG_BY_ID[%s]: %v", groupId[cfg.Channel], cfg)
 		CONFIG_BY_ID[groupId[cfg.Channel]] = cfg
 	}
 }
@@ -170,9 +180,10 @@ func deleteMessageSynchronous(ch string, msg *slack.Message, ttl int) {
 		return
 	}
 
-	info("Delete message: %s(%s)", ch, ts)
+	debug("Delete message: %s(%s)", ch, ts)
+	STATISTICS_DELETED_MESSAGES++
 	if DRY_RUN {
-		info("skip Delete message because of dry run")
+		debug("skip Delete message because of dry run")
 		return
 	}
 
@@ -181,7 +192,7 @@ func deleteMessageSynchronous(ch string, msg *slack.Message, ttl int) {
 	if err != nil && err.Error() != "message_not_found" {
 		errorlog("DeleteMessage(%s, %s) failed: %v", ch, ts, err)
 	} else {
-		info("Message deleted: %s(%s)", ch, ts)
+		debug("Message deleted: %s(%s)", ch, ts)
 		return
 	}
 	errorlog("Failed to delete message %s(%s) for %d times", ch, ts, MAX_RETRIES)
@@ -190,11 +201,14 @@ func deleteMessageSynchronous(ch string, msg *slack.Message, ttl int) {
 }
 
 func handleMessage(ch string, msg *slack.Message) {
-	info("Message: %s", jsonString(msg))
+	STATISTICS_HANDLED_MESSAGES++
+	debug("Message: %s", jsonString(msg))
 	if msg.SubType == "message_deleted" {
 		// not a new message
 		return
 	}
+	// todo only delete if "subtype":"bot_message" and config onlyBotMessages = true
+
 	cfgttl := CONFIG_BY_ID[ch].MessageTTL
 	ttl := DEFAULT_MESSAGE_TTL
 	if cfgttl > 0 {
@@ -202,15 +216,8 @@ func handleMessage(ch string, msg *slack.Message) {
 	}
 	debug("Message %s(%s): cfgttl..%d ttl..%d", ch, msg.Timestamp, cfgttl, ttl)
 	if ttl > 0 {
-	//	deleteMessage(ch, msg, ttl)
 		deleteMessageSynchronous(ch, msg, ttl)
 	}
-}
-
-func handleMessageEvent(msg *slack.MessageEvent) {
-	info("MessageEvent: %s(%s)", msg.Channel, msg.Timestamp)
-	m := slack.Message(*msg)
-	handleMessage(msg.Channel, &m)
 }
 
 func deleteFile(file *slack.File, ttl int) {
@@ -333,7 +340,7 @@ func inspectPast() {
 	if err != nil {
 		fatal("GetChannels() failed: %v", err)
 	}
-	info("There are %d channels", len(channels))
+	debug("There are %d channels", len(channels))
 	for _, ch := range channels {
 		if DEFAULT_MESSAGE_TTL == 0 && CONFIG_BY_ID[ch.ID].MessageTTL == 0 {
 			continue
@@ -346,7 +353,7 @@ func inspectPast() {
 	if err != nil {
 		fatal("GetGroupss() failed: %v", err)
 	}
-	info("There are %d groups", len(groups))
+	debug("There are %d groups", len(groups))
 	for _, group := range groups {
 		if DEFAULT_MESSAGE_TTL == 0 && CONFIG_BY_ID[group.ID].MessageTTL == 0 {
 			continue
@@ -355,17 +362,6 @@ func inspectPast() {
 	}
 
 // get nicht mit bot	inspectFiles()
-}
-
-func setFromEnv(f *flag.Flag) {
-	envKey := "BLACKHOLE_" + strings.Replace(strings.ToUpper(f.Name), "-", "_", -1)
-	envVal := os.Getenv(envKey)
-	if envVal != "" {
-		err := flag.Set(f.Name, envVal)
-		if err != nil {
-			fatal("Cannot set flag %s=%s from environment %s: %v", f.Name, envVal, envKey, err)
-		}
-	}
 }
 
 func init() {
@@ -378,8 +374,7 @@ func init() {
 	flag.BoolVar(&DRY_RUN, "dry-run", false, "Do not delete messages/files")
 	flag.IntVar(&MAX_RETRIES, "max-retries", 5, "Maximum number of retries for message/file deletion")
 	flag.IntVar(&SLACK_API_INTERVAL, "slack-api-interval", 3, "Interval (sec) for api call")
-	flag.StringVar(&SLACK_API_TOKEN, "slack-api-token", "", "Slack API token")
-	flag.VisitAll(setFromEnv)
+	flag.StringVar(&SLACK_API_TOKEN_FILE_PATH, "slack-api-token-file", "", "file with Slack API token")
 	CONFIG_BY_ID = make(map[string]Config)
 }
 
@@ -390,17 +385,5 @@ func main() {
 	initTTL()
 
 	inspectPast()
-	//for msg := range RTM.IncomingEvents {
-	//	switch ev := msg.Data.(type) {
-	//	//case *slack.HelloEvent:
-	//	case *slack.MessageEvent:
-	//		handleMessageEvent(ev)
-	//	case *slack.FileCreatedEvent:
-	//		handleFileCreated(ev)
-	//	case *slack.FileSharedEvent:
-	//		handleFileShared(ev)
-	//	default:
-	//		debug("Event: %T %v", ev, ev)
-	//	}
-	//}
+	info("%d messages deleted from %d", STATISTICS_DELETED_MESSAGES, STATISTICS_HANDLED_MESSAGES)
 }

@@ -11,6 +11,9 @@ Remove messages and files in a certain duration for your Slack team.
 - add the ability the delete msg in groups (private channels)
 - only the groups of the token-holder are seen
 - the tokenholder needs admin permission to delete msgs from other team-members
+- change to slack-api-token-file for stronger security of the api-token (bash history, cron mails etc.)
+- removed ENV config set
+- add handled and deleted messages counter
 
 ## deployment
 
@@ -20,11 +23,21 @@ apt-get -y install golang
 echo "export GOPATH=/usr/share/go/" >> /root/.profile
 cd ~
 git clone https://github.com/SegFaulty/slack-blackhole.git
-go build 
+cd slack-blackhole
+# because of go build -i does not install the dependencies 
+go get github.com/nlopes/slack
+go build
+# then create config and start
 ```
+
+## todo
+
+* todo only delete if "subtype":"bot_message" and config onlyBotMessages = true 
 
 
 ## Usage
+
+a ttl of 0 means nothing will deleted
 
 ```
 $ go build
@@ -41,7 +54,7 @@ $ cat config.json
                 "file_ttl": 86400
         }
 ]
-$ ./slack-blackhole --slack-api-token xoxp-aaa... --defaut-file-ttl $((86400*30)) --config-file config.json
+$ ./slack-blackhole --slack-api-token-file my-token-like-xoxp-aaa...txt --defaut-file-ttl $((86400*30)) --config-file config.json
 ```
 
 ### Other options
