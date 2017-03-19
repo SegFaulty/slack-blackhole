@@ -30,6 +30,11 @@ go build
 # then create config and start
 ```
 
+## token
+
+i use a legacy token of my admin account
+https://api.slack.com/custom-integrations/legacy-tokens
+
 ## todo
 
 * todo only delete if "subtype":"bot_message" and config onlyBotMessages = true 
