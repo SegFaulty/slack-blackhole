@@ -2,6 +2,28 @@
 
 Remove messages and files in a certain duration for your Slack team.
 
+
+## changes
+
+- remove async message deleting, it was defect for already expired msgs
+- the new usage is to start it regularly by cronjob and it will exits if all work is done
+- change logtim to localtime not utc
+- add the ability the delete msg in groups (private channels)
+- only the groups of the token-holder are seen
+- the tokenholder needs admin permission to delete msgs from other team-members
+
+## deployment
+
+```
+apt-get update
+apt-get -y install golang
+echo "export GOPATH=/usr/share/go/" >> /root/.profile
+cd ~
+git clone https://github.com/SegFaulty/slack-blackhole.git
+go build 
+```
+
+
 ## Usage
 
 ```

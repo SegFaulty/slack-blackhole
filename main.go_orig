@@ -34,7 +34,7 @@ var (
 )
 
 func initLog() {
-	log = logpkg.New(os.Stdout, "", logpkg.LstdFlags) // |logpkg.LUTCif Ldate or Ltime is set, use UTC rather than the local time zone  // LstdFlags  = Ldate | Ltime // initial values for the standard logger
+	log = logpkg.New(os.Stdout, "", logpkg.LstdFlags|logpkg.LUTC)
 }
 
 func debug(fmtstr string, args ...interface{}) {
@@ -130,20 +130,6 @@ func initTTL() {
 		info("CONFIG_BY_ID[%s]: %v", channelId[cfg.Channel], cfg)
 		CONFIG_BY_ID[channelId[cfg.Channel]] = cfg
 	}
-	// for groups
-	groups, err := RTM.GetGroups(false)
-	if err != nil {
-		fatal("GetGroups failed: %v", err)
-	}
-	groupId := make(map[string]string)
-	for _, group := range groups {
-		debug("channelId[%s]: %s", group.Name, group.ID)
-		groupId[group.Name] = group.ID
-	}
-	for _, cfg := range cfgs {
-		info("CONFIG_BY_ID[%s]: %v", groupId[cfg.Channel], cfg)
-		CONFIG_BY_ID[groupId[cfg.Channel]] = cfg
-	}
 }
 
 func unixTime(s string) (time.Time, error) {
@@ -156,37 +142,44 @@ func unixTime(s string) (time.Time, error) {
 	return time.Unix(sec, nsec), nil
 }
 
-
-func deleteMessageSynchronous(ch string, msg *slack.Message, ttl int) {
-	ts := msg.Timestamp;
-	timeStamp, err := unixTime(ts)
+func toBeDeleted(timeStamp string, ttl int) (time.Time, error) {
+	ts, err := unixTime(timeStamp)
 	if err != nil {
-		return
+		return ts, err
 	}
-	expire :=  timeStamp.Add(time.Duration(ttl) * time.Second)
-	debug("Message %s from  %s  expire %v", ch, ts, expire)
-	if( time.Now().Unix()<expire.Unix() ){
-		debug("Message is not yet expired")
-		return
-	}
+	return ts.Add(time.Duration(ttl) * time.Second), nil
+}
 
-	info("Delete message: %s(%s)", ch, ts)
-	if DRY_RUN {
-		info("skip Delete message because of dry run")
+func deleteMessage(ch string, msg *slack.Message, ttl int) {
+	ts := msg.Timestamp
+	tbd, err := toBeDeleted(ts, ttl)
+	if err != nil {
+		errorlog("toBeDeleted() for message %s(%s) failed: %v", ch, ts, err)
 		return
 	}
+	info("Message %s(%s) will be deleted at %v", ch, ts, tbd)
+	go func() {
+		<-time.After(tbd.Sub(time.Now()))
+		info("Delete message: %s(%s)", ch, ts)
+		if DRY_RUN {
+			return
+		}
 
-	<-API_READY
-	_, _, err = RTM.DeleteMessage(ch, ts)
-	if err != nil && err.Error() != "message_not_found" {
-		errorlog("DeleteMessage(%s, %s) failed: %v", ch, ts, err)
-	} else {
-		info("Message deleted: %s(%s)", ch, ts)
-		return
-	}
-	errorlog("Failed to delete message %s(%s) for %d times", ch, ts, MAX_RETRIES)
-	return
-
+		backoff := time.Duration(1) * time.Second
+		for i := 0; i < MAX_RETRIES; i++ {
+			<-API_READY
+			_, _, err = RTM.DeleteMessage(ch, ts)
+			if err != nil && err.Error() != "message_not_found" {
+				errorlog("DeleteMessage(%s, %s) failed: %v", ch, ts, err)
+			} else {
+				info("Message deleted: %s(%s)", ch, ts)
+				return
+			}
+			<-time.After(backoff)
+			backoff *= 2
+		}
+		errorlog("Failed to delete message %s(%s) for %d times", ch, ts, MAX_RETRIES)
+	}()
 }
 
 func handleMessage(ch string, msg *slack.Message) {
@@ -202,8 +195,7 @@ func handleMessage(ch string, msg *slack.Message) {
 	}
 	debug("Message %s(%s): cfgttl..%d ttl..%d", ch, msg.Timestamp, cfgttl, ttl)
 	if ttl > 0 {
-	//	deleteMessage(ch, msg, ttl)
-		deleteMessageSynchronous(ch, msg, ttl)
+		deleteMessage(ch, msg, ttl)
 	}
 }
 
@@ -269,10 +261,18 @@ func handleFile(file *slack.File) {
 	}
 }
 
+func handleFileCreated(file *slack.FileCreatedEvent) {
+	info("File Created: %s", file.File.ID)
+	handleFile(&file.File)
+}
 
-func inspectChannelHistory(ch slack.Channel) {
+func handleFileShared(file *slack.FileSharedEvent) {
+	info("File Shared: %s", file.File.ID)
+	handleFile(&file.File)
+}
+
+func inspectHistory(ch slack.Channel) {
 	var err error
-	debug("inspectHistory channel: %s", ch.ID)
 	h := &slack.History{HasMore: true}
 	params := slack.NewHistoryParameters()
 	for h.HasMore {
@@ -283,25 +283,6 @@ func inspectChannelHistory(ch slack.Channel) {
 		}
 		for i := 0; i < len(h.Messages); i++ {
 			handleMessage(ch.ID, &h.Messages[i])
-		}
-		if len(h.Messages) > 0 {
-			params.Latest = h.Messages[len(h.Messages)-1].Timestamp
-		}
-	}
-}
-func inspectGroupHistory(group slack.Group) {
-	var err error
-	debug("inspectHistory group: %s", group.ID)
-	h := &slack.History{HasMore: true}
-	params := slack.NewHistoryParameters()
-	for h.HasMore {
-		<-API_READY
-		h, err = RTM.GetGroupHistory(group.ID, params)
-		if err != nil {
-			fatal("GetGroupHistory(%s, %v) failed: %v", group.ID, params, err)
-		}
-		for i := 0; i < len(h.Messages); i++ {
-			handleMessage(group.ID, &h.Messages[i])
 		}
 		if len(h.Messages) > 0 {
 			params.Latest = h.Messages[len(h.Messages)-1].Timestamp
@@ -338,23 +319,10 @@ func inspectPast() {
 		if DEFAULT_MESSAGE_TTL == 0 && CONFIG_BY_ID[ch.ID].MessageTTL == 0 {
 			continue
 		}
-		inspectChannelHistory(ch)
+		inspectHistory(ch)
 	}
 
-	<-API_READY
-	groups, err := RTM.GetGroups(true) // private channels
-	if err != nil {
-		fatal("GetGroupss() failed: %v", err)
-	}
-	info("There are %d groups", len(groups))
-	for _, group := range groups {
-		if DEFAULT_MESSAGE_TTL == 0 && CONFIG_BY_ID[group.ID].MessageTTL == 0 {
-			continue
-		}
-		inspectGroupHistory(group)
-	}
-
-// get nicht mit bot	inspectFiles()
+	inspectFiles()
 }
 
 func setFromEnv(f *flag.Flag) {
@@ -390,17 +358,17 @@ func main() {
 	initTTL()
 
 	inspectPast()
-	//for msg := range RTM.IncomingEvents {
-	//	switch ev := msg.Data.(type) {
-	//	//case *slack.HelloEvent:
-	//	case *slack.MessageEvent:
-	//		handleMessageEvent(ev)
-	//	case *slack.FileCreatedEvent:
-	//		handleFileCreated(ev)
-	//	case *slack.FileSharedEvent:
-	//		handleFileShared(ev)
-	//	default:
-	//		debug("Event: %T %v", ev, ev)
-	//	}
-	//}
+	for msg := range RTM.IncomingEvents {
+		switch ev := msg.Data.(type) {
+		//case *slack.HelloEvent:
+		case *slack.MessageEvent:
+			handleMessageEvent(ev)
+		case *slack.FileCreatedEvent:
+			handleFileCreated(ev)
+		case *slack.FileSharedEvent:
+			handleFileShared(ev)
+		default:
+			debug("Event: %T %v", ev, ev)
+		}
+	}
 }
