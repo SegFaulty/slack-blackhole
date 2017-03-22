@@ -380,31 +380,31 @@ func inspectFiles() {
 }
 
 func inspectPast() {
-	//<-API_READY
-	//channels, err := RTM.GetChannels(true)
-	//if err != nil {
-	//	fatal("GetChannels() failed: %v", err)
-	//}
-	//debug("There are %d channels", len(channels))
-	//for _, ch := range channels {
-	//	if DEFAULT_MESSAGE_TTL == 0 && CONFIG_BY_ID[ch.ID].MessageTTL == 0 {
-	//		continue
-	//	}
-	//	inspectChannelHistory(ch)
-	//}
-	//
-	//<-API_READY
-	//groups, err := RTM.GetGroups(true) // private channels
-	//if err != nil {
-	//	fatal("GetGroupss() failed: %v", err)
-	//}
-	//debug("There are %d groups", len(groups))
-	//for _, group := range groups {
-	//	if DEFAULT_MESSAGE_TTL == 0 && CONFIG_BY_ID[group.ID].MessageTTL == 0 {
-	//		continue
-	//	}
+	<-API_READY
+	channels, err := RTM.GetChannels(true)
+	if err != nil {
+		fatal("GetChannels() failed: %v", err)
+	}
+	debug("There are %d channels", len(channels))
+	for _, ch := range channels {
+		if DEFAULT_MESSAGE_TTL == 0 && CONFIG_BY_ID[ch.ID].MessageTTL == 0 {
+			continue
+		}
+		inspectChannelHistory(ch)
+	}
+	
+	<-API_READY
+	groups, err := RTM.GetGroups(true) // private channels
+	if err != nil {
+		fatal("GetGroupss() failed: %v", err)
+	}
+	debug("There are %d groups", len(groups))
+	for _, group := range groups {
+		if DEFAULT_MESSAGE_TTL == 0 && CONFIG_BY_ID[group.ID].MessageTTL == 0 {
+			continue
+		}
 	//	inspectGroupHistory(group)
-	//}
+	}
 
 	<-API_READY
 	imChannels, err := RTM.GetIMChannels() // direct user im channels
