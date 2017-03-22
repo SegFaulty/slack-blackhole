@@ -403,7 +403,7 @@ func inspectPast() {
 		if DEFAULT_MESSAGE_TTL == 0 && CONFIG_BY_ID[group.ID].MessageTTL == 0 {
 			continue
 		}
-	//	inspectGroupHistory(group)
+		inspectGroupHistory(group)
 	}
 
 	<-API_READY
