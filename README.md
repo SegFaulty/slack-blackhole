@@ -7,7 +7,7 @@ Remove messages and files in a certain duration for your Slack team.
 
 - remove async message deleting, it was defect for already expired msgs
 - the new usage is to start it regularly by cronjob and it will exits if all work is done
-- change logtim to localtime not utc
+- change logtim to localtime not utc 
 - add the ability the delete msg in groups (private channels)
 - add the ability the delete msg from direct user conversations (imChannels)
 - only the groups of the token-holder are seen
