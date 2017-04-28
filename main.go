@@ -105,6 +105,7 @@ type Config struct {
 	Channel    string `json:"channel"`
 	MessageTTL int    `json:"message_ttl"`
 	FileTTL    int    `json:"file_ttl"`
+	OnlyBotMessages    bool    `json:"only_bot_messages"`
 }
 
 func initTTL() {
@@ -233,6 +234,10 @@ func handleMessage(ch string, msg *slack.Message) {
 		return
 	}
 	// todo only delete if "subtype":"bot_message" and config onlyBotMessages = true
+	if msg.SubType != "bot_message" && CONFIG_BY_ID[ch].OnlyBotMessages {
+		// not a new message
+		return
+	}
 
 	cfgttl := CONFIG_BY_ID[ch].MessageTTL
 	ttl := DEFAULT_MESSAGE_TTL

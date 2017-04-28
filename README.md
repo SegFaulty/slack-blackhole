@@ -15,6 +15,7 @@ Remove messages and files in a certain duration for your Slack team.
 - change to slack-api-token-file for stronger security of the api-token (bash history, cron mails etc.)
 - removed ENV config set
 - add handled and deleted messages counter
+- only delete if "subtype":"bot_message" and config "only_bot_messages" = true 
 
 ## deployment
 
@@ -38,7 +39,6 @@ https://api.slack.com/custom-integrations/legacy-tokens
 
 ## todo
 
-* todo only delete if "subtype":"bot_message" and config onlyBotMessages = true 
 
 
 ## Usage
@@ -53,11 +53,13 @@ $ cat config.json
                 "channel": "dev_null",
                 "message_ttl": 600,
                 "file_ttl": 600
+                "only_bot_messages": true
         },
         {
                 "channel": "dev_null_daily",
                 "message_ttl": 86400,
                 "file_ttl": 86400
+                "only_bot_messages": false
         }
 ]
 $ ./slack-blackhole --slack-api-token-file my-token-like-xoxp-aaa...txt --defaut-file-ttl $((86400*30)) --config-file config.json
