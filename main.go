@@ -235,7 +235,8 @@ func handleMessage(ch string, msg *slack.Message) {
 	}
 	// todo only delete if "subtype":"bot_message" and config onlyBotMessages = true
 	if msg.SubType != "bot_message" && CONFIG_BY_ID[ch].OnlyBotMessages {
-		// not a new message
+		// not a bot message
+		debug("skip message: onlyBotMessage Mode active and this is not a bot message")
 		return
 	}
 
