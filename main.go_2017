@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/slack-go/slack"
+	"github.com/nlopes/slack"
 )
 
 var (
@@ -71,20 +71,23 @@ func initApiThrottle() {
 }
 
 func initSlackRTMClient() {
+	slack.SetLogger(log)
+
 	if SLACK_API_TOKEN_FILE_PATH == "" {
 		fatal("BLACKHOLE_SLACK_API_TOKEN is not set")
 	}
-	b, err := ioutil.ReadFile(SLACK_API_TOKEN_FILE_PATH) // just pass the file name
-    if err != nil {
-        log.Fatal("slack api token file read failed: %s",err);
-    }
-    apiToken := strings.TrimSpace(string(b)) // convert content to a 'string' and trim whitepsaces
 
-	debug("SLACK_API_TOKEN: %s", apiToken)
+	b, err := ioutil.ReadFile(SLACK_API_TOKEN_FILE_PATH) // just pass the file name
+	    if err != nil {
+		log.Fatal("slack api token file read failed: %s",err);
+	    }
+    	apiToken := strings.TrimSpace(string(b)) // convert content to a 'string' and trim whitepsaces
+
+
+	debug("slack api token: %s", apiToken)
 	api := slack.New(apiToken)
-	slack.OptionLog(log)(api)
 	if DEBUG_SLACK {
-		slack.OptionDebug(true)(api)
+		api.SetDebug(true)
 	}
 	<-API_READY
 	RTM = api.NewRTM()
@@ -125,9 +128,9 @@ func initTTL() {
 	}
 	debug("Config: %v", cfgs)
 
-	channels, err := getAllChannels(RTM)
+	channels, err := RTM.GetChannels(false)
 	if err != nil {
-		fatal("getting the list of channels failed: %v", err)
+		fatal("GetChannles failed: %v", err)
 	}
 	channelId := make(map[string]string)
 	for _, ch := range channels {
@@ -138,66 +141,45 @@ func initTTL() {
 		debug("CONFIG_BY_ID[%s]: %v", channelId[cfg.Channel], cfg)
 		CONFIG_BY_ID[channelId[cfg.Channel]] = cfg
 	}
-
-	// direkt übernommen, kann falsch sein
-
 	// for groups
-    groups, err := RTM.GetGroups(false)
-    if err != nil {
-        fatal("GetGroups failed: %v", err)
-    }
-    groupId := make(map[string]string)
-    for _, group := range groups {
-        debug("channelId[%s]: %s", group.Name, group.ID)
-        groupId[group.Name] = group.ID
-    }
-    for _, cfg := range cfgs {
-        debug("CONFIG_BY_ID[%s]: %v", groupId[cfg.Channel], cfg)
-        CONFIG_BY_ID[groupId[cfg.Channel]] = cfg
-    }
-
-    // for im channels
-    users, err := RTM.GetUsers()
-    if err != nil {
-        fatal("GetUsers failed: %v", err)
-    }
-    userName := make(map[string]string)
-    for _, user1 := range users {
-        debug("userId[%s]: %s", user1.Name, user1.ID)
-        userName[user1.ID] = user1.Name
-    }
-    ims, err := RTM.GetIMChannels()
-    if err != nil {
-        fatal("GetIMChannels failed: %v", err)
-    }
-    imChannelId := make(map[string]string)
-    for _, im := range ims {
-        debug("imChannelId[%s]: %s", im.ID, im.User)
-        imChannelId[userName[im.User]] = im.ID
-    }
-
-    for _, cfg := range cfgs {
-        debug("CONFIG_BY_ID[%s]: %v", imChannelId[cfg.Channel], cfg)
-        CONFIG_BY_ID[imChannelId[cfg.Channel]] = cfg
-    }
-
-}
-
-func getAllChannels(rtm *slack.RTM) ([]slack.Channel, error) {
-	params := &slack.GetConversationsParameters{}
-	var channels []slack.Channel
-	for cont := true; cont; {
-		chs, nextCursor, err := rtm.GetConversations(params)
-		if err != nil {
-			return nil, fmt.Errorf("GetConversations: %w", err)
-		}
-		channels = append(channels, chs...)
-		params.Cursor = nextCursor
-		if nextCursor == "" {
-			cont = false
-		}
+	groups, err := RTM.GetGroups(false)
+	if err != nil {
+		fatal("GetGroups failed: %v", err)
 	}
-	return channels, nil
+	groupId := make(map[string]string)
+	for _, group := range groups {
+		debug("channelId[%s]: %s", group.Name, group.ID)
+		groupId[group.Name] = group.ID
+	}
+	for _, cfg := range cfgs {
+		debug("CONFIG_BY_ID[%s]: %v", groupId[cfg.Channel], cfg)
+		CONFIG_BY_ID[groupId[cfg.Channel]] = cfg
+	}
+
+	// for im channels
+	users, err := RTM.GetUsers()
+	if err != nil {
+		fatal("GetUsers failed: %v", err)
+	}
+	userName := make(map[string]string)
+	for _, user1 := range users {
+		debug("userId[%s]: %s", user1.Name, user1.ID)
+		userName[user1.ID] = user1.Name
+	}
+	ims, err := RTM.GetIMChannels()
+	if err != nil {
+		fatal("GetIMChannels failed: %v", err)
+	}
+	imChannelId := make(map[string]string)
+	for _, im := range ims {
+		debug("imChannelId[%s]: %s", im.ID, im.User)
+		imChannelId[userName[im.User]] = im.ID
+	}
+
+	for _, cfg := range cfgs {
+		debug("CONFIG_BY_ID[%s]: %v", imChannelId[cfg.Channel], cfg)
+		CONFIG_BY_ID[imChannelId[cfg.Channel]] = cfg
+	}
 }
 
 func unixTime(s string) (time.Time, error) {
@@ -209,6 +191,7 @@ func unixTime(s string) (time.Time, error) {
 	nsec := int64((f - float64(sec)) * 1000000000)
 	return time.Unix(sec, nsec), nil
 }
+
 
 func deleteMessageSynchronous(ch string, msg *slack.Message, ttl int) {
 	ts := msg.Timestamp;
@@ -243,55 +226,13 @@ func deleteMessageSynchronous(ch string, msg *slack.Message, ttl int) {
 
 }
 
-
-func toBeDeleted(timeStamp string, ttl int) (time.Time, error) {
-	ts, err := unixTime(timeStamp)
-	if err != nil {
-		return ts, err
-	}
-	return ts.Add(time.Duration(ttl) * time.Second), nil
-}
-
-func deleteMessage(ch string, msg *slack.Message, ttl int) {
-	ts := msg.Timestamp
-	tbd, err := toBeDeleted(ts, ttl)
-	if err != nil {
-		errorlog("toBeDeleted() for message %s(%s) failed: %v", ch, ts, err)
-		return
-	}
-	info("Message %s(%s) will be deleted at %v", ch, ts, tbd)
-	go func() {
-		<-time.After(tbd.Sub(time.Now()))
-		info("Delete message: %s(%s)", ch, ts)
-		if DRY_RUN {
-			return
-		}
-
-		backoff := time.Duration(1) * time.Second
-		for i := 0; i < MAX_RETRIES; i++ {
-			<-API_READY
-			_, _, err = RTM.DeleteMessage(ch, ts)
-			if err != nil && err.Error() != "message_not_found" {
-				errorlog("DeleteMessage(%s, %s) failed: %v", ch, ts, err)
-			} else {
-				info("Message deleted: %s(%s)", ch, ts)
-				return
-			}
-			<-time.After(backoff)
-			backoff *= 2
-		}
-		errorlog("Failed to delete message %s(%s) for %d times", ch, ts, MAX_RETRIES)
-	}()
-}
-
 func handleMessage(ch string, msg *slack.Message) {
 	STATISTICS_HANDLED_MESSAGES++
-    debug("Message: %s", jsonString(msg))
+	debug("Message: %s", jsonString(msg))
 	if msg.SubType == "message_deleted" {
 		// not a new message
 		return
 	}
-
 	// todo only delete if "subtype":"bot_message" and config onlyBotMessages = true
 	if msg.SubType != "bot_message" && CONFIG_BY_ID[ch].OnlyBotMessages {
 		// not a bot message
@@ -307,14 +248,7 @@ func handleMessage(ch string, msg *slack.Message) {
 	debug("Message %s(%s): cfgttl..%d ttl..%d", ch, msg.Timestamp, cfgttl, ttl)
 	if ttl > 0 {
 		deleteMessageSynchronous(ch, msg, ttl)
-		// deleteMessage(ch, msg, ttl)
 	}
-}
-
-func handleMessageEvent(msg *slack.MessageEvent) {
-	info("MessageEvent: %s(%s)", msg.Channel, msg.Timestamp)
-	m := slack.Message(*msg)
-	handleMessage(msg.Channel, &m)
 }
 
 func deleteFile(file *slack.File, ttl int) {
@@ -373,38 +307,25 @@ func handleFile(file *slack.File) {
 	}
 }
 
-func handleFileCreated(file *slack.FileCreatedEvent) {
-	info("File Created: %s", file.File.ID)
-	handleFile(&file.File)
-}
-
-func handleFileShared(file *slack.FileSharedEvent) {
-	info("File Shared: %s", file.File.ID)
-	handleFile(&file.File)
-}
-
 // blaMarker
 
 func inspectChannelHistory(ch slack.Channel) {
-	params := &slack.GetConversationHistoryParameters{
-		ChannelID: ch.ID,
-	}
-	var msgs []slack.Message
-	for cont := true; cont; {
+	var err error
+	debug("inspectHistory channel: %s", ch.ID)
+	h := &slack.History{HasMore: true}
+	params := slack.NewHistoryParameters()
+	for h.HasMore {
 		<-API_READY
-		res, err := RTM.GetConversationHistory(params)
+		h, err = RTM.GetChannelHistory(ch.ID, params)
 		if err != nil {
-			fatal("GetConversationHistory() for %s failed: %v", ch.ID, err)
+			fatal("GetChannelHistory(%s, %v) failed: %v", ch.ID, params, err)
 		}
-		msgs = append(msgs, res.Messages...)
-		params.Cursor = res.ResponseMetaData.NextCursor
-		if params.Cursor == "" {
-			cont = false
+		for i := 0; i < len(h.Messages); i++ {
+			handleMessage(ch.ID, &h.Messages[i])
 		}
-	}
-
-	for i := 0; i < len(msgs); i++ {
-		handleMessage(ch.ID, &msgs[i])
+		if len(h.Messages) > 0 {
+			params.Latest = h.Messages[len(h.Messages)-1].Timestamp
+		}
 	}
 }
 
@@ -468,9 +389,9 @@ func inspectFiles() {
 
 func inspectPast() {
 	<-API_READY
-	channels, err := getAllChannels(RTM)
+	channels, err := RTM.GetChannels(true)
 	if err != nil {
-		fatal("getting the list of channels failed: %v", err)
+		fatal("GetChannels() failed: %v", err)
 	}
 	debug("There are %d channels", len(channels))
 	for _, ch := range channels {
@@ -479,7 +400,7 @@ func inspectPast() {
 		}
 		inspectChannelHistory(ch)
 	}
-
+	
 	<-API_READY
 	groups, err := RTM.GetGroups(true) // private channels
 	if err != nil {
@@ -511,18 +432,6 @@ func inspectPast() {
 // get nicht mit bot	inspectFiles()
 }
 
-
-func setFromEnv(f *flag.Flag) {
-	envKey := "BLACKHOLE_" + strings.Replace(strings.ToUpper(f.Name), "-", "_", -1)
-	envVal := os.Getenv(envKey)
-	if envVal != "" {
-		err := flag.Set(f.Name, envVal)
-		if err != nil {
-			fatal("Cannot set flag %s=%s from environment %s: %v", f.Name, envVal, envKey, err)
-		}
-	}
-}
-
 func init() {
 	initLog()
 	flag.StringVar(&CONFIG_FILE, "config-file", "", "Configuration file")
@@ -534,7 +443,6 @@ func init() {
 	flag.IntVar(&MAX_RETRIES, "max-retries", 5, "Maximum number of retries for message/file deletion")
 	flag.IntVar(&SLACK_API_INTERVAL, "slack-api-interval", 3, "Interval (sec) for api call")
 	flag.StringVar(&SLACK_API_TOKEN_FILE_PATH, "slack-api-token-file", "", "file with Slack API token")
-//	flag.VisitAll(setFromEnv)
 	CONFIG_BY_ID = make(map[string]Config)
 }
 
@@ -545,9 +453,5 @@ func main() {
 	initTTL()
 
 	inspectPast()
-
 	info("%d messages deleted from %d", STATISTICS_DELETED_MESSAGES, STATISTICS_HANDLED_MESSAGES)
-
-
-// removed all events
 }
